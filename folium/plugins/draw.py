@@ -7,6 +7,7 @@ from branca.element import CssLink, Element, Figure, JavascriptLink, MacroElemen
 from jinja2 import Template
 
 
+
 class Draw(MacroElement):
     """
     Vector drawing and editing plugin for Leaflet.
@@ -20,7 +21,7 @@ class Draw(MacroElement):
     https://leaflet.github.io/Leaflet.draw/docs/leaflet-draw-latest.html
 
     """
-    def __init__(self, export=False):
+    def __init__(self, export=True):
         super(Draw, self).__init__()
         self._name = 'DrawControl'
         self.export = export
@@ -49,10 +50,28 @@ class Draw(MacroElement):
         });
 
         document.getElementById('export').onclick = function(e) {
-            var data = drawnItems.toGeoJSON();
-            var convertedData = 'text/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(data));
-            document.getElementById('export').setAttribute('href', 'data:' + convertedData);
-            document.getElementById('export').setAttribute('download','data.geojson');
+            var shapes = []
+            shapes.push([22.2222])
+
+            drawnItems.eachLayer(function(layer) {
+
+                if (layer instanceof L.Circle) {
+                    shapes.push([layer.getLatLng().lat])
+                    shapes.push([layer.getLatLng().lng])
+                    shapes.push([layer.getRadius()])
+                }
+
+                drawnItems.removeLayer(layer)
+            });
+
+            var data = shapes.toString();
+            document.getElementById('export').setAttribute('href', 'data:' + data);
+            document.getElementById('export').setAttribute('download','data.csv');
+
+            drawnItems.eachLayers(function(layer) {
+                drawnItems.removeLayer(layer)
+            });
+            shapes = []
         }
             {% endmacro %}
             """)
@@ -65,10 +84,9 @@ class Draw(MacroElement):
                                             'if it is not in a Figure.')
 
         figure.header.add_child(
-            JavascriptLink('https://cdn.rawgit.com/Leaflet/Leaflet.draw/v0.4.12/dist/leaflet.draw.js'))  # noqa
-
+            JavascriptLink('https://cdn.rawgit.com/Leaflet/Leaflet.draw/v0.4.12/dist/leaflet.draw.js'))
         figure.header.add_child(
-            CssLink('https://cdn.rawgit.com/Leaflet/Leaflet.draw/v0.4.12/dist/leaflet.draw.css'))  # noqa
+            CssLink('https://cdn.rawgit.com/Leaflet/Leaflet.draw/v0.4.12/dist/leaflet.draw.css'))
 
         export_style = """<style>
         #export {
@@ -82,12 +100,13 @@ class Draw(MacroElement):
         border-radius: 4px;
         font-family: 'Helvetica Neue';
         cursor: pointer;
-        font-size: 12px;
+        font-size: 18px;
         text-decoration: none;
-        top: 90px;
+        top: 50px;
         }
         </style>"""
         export_button = """<a href='#' id='export'>Export</a>"""
         if self.export:
             figure.header.add_child(Element(export_style), name='export')
             figure.html.add_child(Element(export_button), name='export_button')
+

@@ -8,10 +8,12 @@ import os
 import struct
 import zlib
 
-import numpy as np
-
 from six import binary_type, text_type
 
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 try:
     from urllib.parse import uses_relative, uses_netloc, uses_params, urlparse
@@ -58,7 +60,7 @@ def _locations_tolist(x):
 
 def _flatten(container):
     for i in container:
-        if isinstance(i, (list, tuple, np.ndarray)):
+        if isinstance(i, (list, tuple)):
             for j in _flatten(i):
                 yield j
         else:
@@ -68,6 +70,30 @@ def _flatten(container):
 def _isnan(values):
     """Check if there are NaNs values in the iterable."""
     return any(math.isnan(value) for value in _flatten(values))
+
+
+def _parse_path(**kw):
+    """
+    Parse leaflet `Path` options.
+    http://leafletjs.com/reference-1.2.0.html#path
+
+    """
+    color = kw.pop('color', '#3388ff')
+    return {
+        'stroke': kw.pop('stroke', True),
+        'color': color,
+        'weight': kw.pop('weight', 3),
+        'opacity': kw.pop('opacity', 1.0),
+        'lineCap': kw.pop('line_cap', 'round'),
+        'lineJoin': kw.pop('line_join', 'round'),
+        'dashArray': kw.pop('dash_array', None),
+        'dashOffset': kw.pop('dash_offset', None),
+        'fill': kw.pop('fill', False),
+        'fillColor': kw.pop('fill_color', color),
+        'fillOpacity': kw.pop('fill_opacity', 0.2),
+        'fillRule': kw.pop('fill_rule', 'evenodd'),
+        'bubblingMouseEvents': kw.pop('bubbling_mouse_events', True),
+    }
 
 
 def _parse_wms(**kw):
@@ -165,6 +191,10 @@ def write_png(data, origin='upper', colormap=None):
     PNG formatted byte string
 
     """
+    if np is None:
+        raise ImportError('The NumPy package is required '
+                          ' for this functionality')
+
     if colormap is None:
         def colormap(x):
             return (x, x, x, 1)
@@ -279,83 +309,3 @@ def mercator_transform(data, lat_bounds, origin='upper', height_out=None):
     if origin == 'upper':
         out = out[::-1, :, :]
     return out
-
-
-def none_min(x, y):
-    if x is None:
-        return y
-    elif y is None:
-        return x
-    else:
-        return min(x, y)
-
-
-def none_max(x, y):
-    if x is None:
-        return y
-    elif y is None:
-        return x
-    else:
-        return max(x, y)
-
-
-def iter_coords(obj):
-    """
-    Returns all the coordinate tuples from a geometry or feature.
-
-    """
-    if isinstance(obj, (tuple, list)):
-        coords = obj
-    elif 'features' in obj:
-        coords = [geom['geometry']['coordinates'] for geom in obj['features']]
-    elif 'geometry' in obj:
-        coords = obj['geometry']['coordinates']
-    else:
-        coords = obj.get('coordinates', obj)
-    for coord in coords:
-        if isinstance(coord, (float, int)):
-            yield tuple(coords)
-            break
-        else:
-            for f in iter_coords(coord):
-                yield f
-
-
-def _locations_mirror(x):
-    """
-    Mirrors the points in a list-of-list-of-...-of-list-of-points.
-    For example:
-    >>> _locations_mirror([[[1, 2], [3, 4]], [5, 6], [7, 8]])
-    [[[2, 1], [4, 3]], [6, 5], [8, 7]]
-
-    """
-    if hasattr(x, '__iter__'):
-        if hasattr(x[0], '__iter__'):
-            return list(map(_locations_mirror, x))
-        else:
-            return list(x[::-1])
-    else:
-        return x
-
-
-def get_bounds(locations, lonlat=False):
-    """
-    Computes the bounds of the object in the form
-    [[lat_min, lon_min], [lat_max, lon_max]]
-
-    """
-    bounds = [[None, None], [None, None]]
-    for point in iter_coords(locations):
-        bounds = [
-            [
-                none_min(bounds[0][0], point[0]),
-                none_min(bounds[0][1], point[1]),
-            ],
-            [
-                none_max(bounds[1][0], point[0]),
-                none_max(bounds[1][1], point[1]),
-            ],
-        ]
-    if lonlat:
-        bounds = _locations_mirror(bounds)
-    return bounds

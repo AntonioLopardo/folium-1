@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 
 """
+Map
+------
+
 Classes for drawing maps.
 
 """
@@ -8,16 +11,349 @@ Classes for drawing maps.
 from __future__ import (absolute_import, division, print_function)
 
 import json
+import os
+import tempfile
+import time
 
 from collections import OrderedDict
 
 from branca.element import CssLink, Element, Figure, Html, JavascriptLink, MacroElement  # noqa
+from branca.utilities import _parse_size
 
-from folium.utilities import _validate_coordinates, get_bounds
+from folium.utilities import _validate_coordinates, _validate_location
 
-from jinja2 import Template
+from jinja2 import Environment, PackageLoader, Template
 
 from six import binary_type, text_type
+
+ENV = Environment(loader=PackageLoader('folium', 'templates'))
+
+_default_js = [
+    ('leaflet',
+     'https://cdn.jsdelivr.net/npm/leaflet@1.2.0/dist/leaflet.js'),
+    ('jquery',
+     'https://ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js'),
+    ('bootstrap',
+     'https://maxcdn.bootstrapcdn.com/bootstrap/3.2.0/js/bootstrap.min.js'),
+    ('awesome_markers',
+     'https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.js'),  # noqa
+    ]
+
+_default_css = [
+    ('leaflet_css',
+     'https://cdn.jsdelivr.net/npm/leaflet@1.2.0/dist/leaflet.css'),
+    ('bootstrap_css',
+     'https://maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap.min.css'),
+    ('bootstrap_theme_css',
+     'https://maxcdn.bootstrapcdn.com/bootstrap/3.2.0/css/bootstrap-theme.min.css'),  # noqa
+    ('awesome_markers_font_css',
+     'https://maxcdn.bootstrapcdn.com/font-awesome/4.6.3/css/font-awesome.min.css'),  # noqa
+    ('awesome_markers_css',
+     'https://cdnjs.cloudflare.com/ajax/libs/Leaflet.awesome-markers/2.0.2/leaflet.awesome-markers.css'),  # noqa
+    ('awesome_rotate_css',
+     'https://rawgit.com/python-visualization/folium/master/folium/templates/leaflet.awesome.rotate.css'),  # noqa
+    ]
+
+
+class LegacyMap(MacroElement):
+    """Create a Map with Folium and Leaflet.js
+
+    Generate a base map of given width and height with either default
+    tilesets or a custom tileset URL. The following tilesets are built-in
+    to Folium. Pass any of the following to the "tiles" keyword:
+
+        - "OpenStreetMap"
+        - "Mapbox Bright" (Limited levels of zoom for free tiles)
+        - "Mapbox Control Room" (Limited levels of zoom for free tiles)
+        - "Stamen" (Terrain, Toner, and Watercolor)
+        - "Cloudmade" (Must pass API key)
+        - "Mapbox" (Must pass API key)
+        - "CartoDB" (positron and dark_matter)
+
+    You can pass a custom tileset to Folium by passing a Leaflet-style
+    URL to the tiles parameter: ``http://{s}.yourtiles.com/{z}/{x}/{y}.png``
+
+    Parameters
+    ----------
+    location: tuple or list, default None
+        Latitude and Longitude of Map (Northing, Easting).
+    width: pixel int or percentage string (default: '100%')
+        Width of the map.
+    height: pixel int or percentage string (default: '100%')
+        Height of the map.
+    tiles: str, default 'OpenStreetMap'
+        Map tileset to use. Can choose from a list of built-in tiles,
+        pass a custom URL or pass `None` to create a map without tiles.
+    API_key: str, default None
+        API key for Cloudmade or Mapbox tiles.
+    max_zoom: int, default 18
+        Maximum zoom depth for the map.
+    zoom_start: int, default 10
+        Initial zoom level for the map.
+    attr: string, default None
+        Map tile attribution; only required if passing custom tile URL.
+    detect_retina: bool, default False
+        If true and user is on a retina display, it will request four
+        tiles of half the specified size and a bigger zoom level in place
+        of one to utilize the high resolution.
+    crs : str, default 'EPSG3857'
+        Defines coordinate reference systems for projecting geographical points
+        into pixel (screen) coordinates and back.
+        You can use Leaflet's values :
+        * EPSG3857 : The most common CRS for online maps, used by almost all
+        free and commercial tile providers. Uses Spherical Mercator projection.
+        Set in by default in Map's crs option.
+        * EPSG4326 : A common CRS among GIS enthusiasts.
+        Uses simple Equirectangular projection.
+        * EPSG3395 : Rarely used by some commercial tile providers.
+        Uses Elliptical Mercator projection.
+        * Simple : A simple CRS that maps longitude and latitude into
+        x and y directly. May be used for maps of flat surfaces
+        (e.g. game maps). Note that the y axis should still be inverted
+        (going from bottom to top).
+    control_scale : bool, default False
+        Whether to add a control scale on the map.
+    prefer_canvas : bool, default False
+        Forces Leaflet to use the Canvas back-end (if available) for
+        vector layers instead of SVG. This can increase performance
+        considerably in some cases (e.g. many thousands of circle
+        markers on the map).
+    no_touch : bool, default False
+        Forces Leaflet to not use touch events even if it detects them.
+    disable_3d : bool, default False
+        Forces Leaflet to not use hardware-accelerated CSS 3D
+        transforms for positioning (which may cause glitches in some
+        rare environments) even if they're supported.
+
+    Returns
+    -------
+    Folium LegacyMap Object
+
+    Examples
+    --------
+    >>> map = folium.LegacyMap(location=[45.523, -122.675],
+    ...                        width=750, height=500)
+    >>> map = folium.LegacyMap(location=[45.523, -122.675],
+    ...                        tiles='Mapbox Control Room')
+    >>> map = folium.LegacyMap(location=(45.523, -122.675), max_zoom=20,
+    ...                        tiles='Cloudmade', API_key='YourKey')
+    >>> map = folium.LegacyMap(
+    ...    location=[45.523, -122.675],
+    ...    zoom_start=2,
+    ...    tiles='http://{s}.tiles.mapbox.com/v3/mapbox.control-room/{z}/{x}/{y}.png',
+    ...    attr='Mapbox attribution'
+    ...)
+
+    """
+    def __init__(self, location=None, width='100%', height='100%',
+                 left='0%', top='0%', position='relative',
+                 tiles='OpenStreetMap', API_key=None, max_zoom=18, min_zoom=1,
+                 zoom_start=10, world_copy_jump=False,
+                 no_wrap=False, attr=None, min_lat=-90, max_lat=90,
+                 min_lon=-180, max_lon=180, max_bounds=False,
+                 detect_retina=False, crs='EPSG3857', control_scale=False,
+                 prefer_canvas=False, no_touch=False, disable_3d=False,
+                 subdomains='abc', png_enabled=False):
+        super(LegacyMap, self).__init__()
+        self._name = 'Map'
+        self._env = ENV
+        # Undocumented for now b/c this will be subject to a re-factor soon.
+        self._png_image = None
+        self.png_enabled = png_enabled
+
+        if not location:
+            # If location is not passed we center and ignore zoom.
+            self.location = [0, 0]
+            self.zoom_start = min_zoom
+        else:
+            self.location = _validate_location(location)
+            self.zoom_start = zoom_start
+
+        Figure().add_child(self)
+
+        # Map Size Parameters.
+        self.width = _parse_size(width)
+        self.height = _parse_size(height)
+        self.left = _parse_size(left)
+        self.top = _parse_size(top)
+        self.position = position
+
+        self.min_lat = min_lat
+        self.max_lat = max_lat
+        self.min_lon = min_lon
+        self.max_lon = max_lon
+        self.max_bounds = max_bounds
+        self.no_wrap = no_wrap
+        self.world_copy_jump = world_copy_jump
+
+        self.crs = crs
+        self.control_scale = control_scale
+
+        self.global_switches = GlobalSwitches(
+            prefer_canvas,
+            no_touch,
+            disable_3d
+        )
+
+        if tiles:
+            self.add_tile_layer(
+                tiles=tiles, min_zoom=min_zoom, max_zoom=max_zoom,
+                no_wrap=no_wrap, attr=attr,
+                API_key=API_key, detect_retina=detect_retina,
+                subdomains=subdomains
+            )
+
+        self._template = Template(u"""
+        {% macro header(this, kwargs) %}
+            <style> #{{this.get_name()}} {
+                position : {{this.position}};
+                width : {{this.width[0]}}{{this.width[1]}};
+                height: {{this.height[0]}}{{this.height[1]}};
+                left: {{this.left[0]}}{{this.left[1]}};
+                top: {{this.top[0]}}{{this.top[1]}};
+                }
+            </style>
+        {% endmacro %}
+        {% macro html(this, kwargs) %}
+            <div class="folium-map" id="{{this.get_name()}}" ></div>
+        {% endmacro %}
+
+        {% macro script(this, kwargs) %}
+
+            {% if this.max_bounds %}
+                var southWest = L.latLng({{ this.min_lat }}, {{ this.min_lon }});
+                var northEast = L.latLng({{ this.max_lat }}, {{ this.max_lon }});
+                var bounds = L.latLngBounds(southWest, northEast);
+            {% else %}
+                var bounds = null;
+            {% endif %}
+
+            var {{this.get_name()}} = L.map(
+                                  '{{this.get_name()}}',
+                                  {center: [{{this.location[0]}},{{this.location[1]}}],
+                                  zoom: {{this.zoom_start}},
+                                  maxBounds: bounds,
+                                  layers: [],
+                                  worldCopyJump: {{this.world_copy_jump.__str__().lower()}},
+                                  crs: L.CRS.{{this.crs}}
+                                 });
+            {% if this.control_scale %}L.control.scale().addTo({{this.get_name()}});{% endif %}
+        {% endmacro %}
+        """)  # noqa
+
+    def _repr_html_(self, **kwargs):
+        """Displays the HTML Map in a Jupyter notebook."""
+        if self._parent is None:
+            self.add_to(Figure())
+            out = self._parent._repr_html_(**kwargs)
+            self._parent = None
+        else:
+            out = self._parent._repr_html_(**kwargs)
+        return out
+
+    def _to_png(self):
+        """Export the HTML to byte representation of a PNG image."""
+        if self._png_image is None:
+            import selenium.webdriver
+
+            with tempfile.NamedTemporaryFile(suffix='.html') as f:
+                fname = f.name
+                self.save(fname, close_file=False)
+                driver = selenium.webdriver.PhantomJS(
+                    service_log_path=os.path.devnull
+                )
+                driver.get('file://{}'.format(fname))
+                driver.maximize_window()
+                # Ignore user map size.
+                driver.execute_script("document.body.style.width = '100%';")  # noqa
+                # We should probably monitor if some element is present,
+                # but this is OK for now.
+                time.sleep(3)
+                png = driver.get_screenshot_as_png()
+                driver.quit()
+                self._png_image = png
+        return self._png_image
+
+    def _repr_png_(self):
+        """Displays the PNG Map in a Jupyter notebook."""
+        # The notebook calls all _repr_*_ by default.
+        # We don't want that here b/c this one is quite slow.
+        if not self.png_enabled:
+            return None
+        return self._to_png()
+
+    def add_tile_layer(self, tiles='OpenStreetMap', name=None,
+                       API_key=None, max_zoom=18, min_zoom=1,
+                       attr=None, active=False,
+                       detect_retina=False, no_wrap=False, subdomains='abc',
+                       **kwargs):
+        """
+        Add a tile layer to the map. See TileLayer for options.
+
+        """
+        tile_layer = TileLayer(tiles=tiles, name=name,
+                               min_zoom=min_zoom, max_zoom=max_zoom,
+                               attr=attr, API_key=API_key,
+                               detect_retina=detect_retina,
+                               subdomains=subdomains,
+                               no_wrap=no_wrap)
+        self.add_child(tile_layer, name=tile_layer.tile_name)
+
+    def render(self, **kwargs):
+        """Renders the HTML representation of the element."""
+        figure = self.get_root()
+        assert isinstance(figure, Figure), ('You cannot render this Element '
+                                            'if it is not in a Figure.')
+
+        # Set global switches
+        figure.header.add_child(self.global_switches, name='global_switches')
+
+        # Import Javascripts
+        for name, url in _default_js:
+            figure.header.add_child(JavascriptLink(url), name=name)
+
+        # Import Css
+        for name, url in _default_css:
+            figure.header.add_child(CssLink(url), name=name)
+
+        figure.header.add_child(Element(
+            '<style>html, body {'
+            'width: 100%;'
+            'height: 100%;'
+            'margin: 0;'
+            'padding: 0;'
+            '}'
+            '</style>'), name='css_style')
+
+        figure.header.add_child(Element(
+            '<style>#map {'
+            'position:absolute;'
+            'top:0;'
+            'bottom:0;'
+            'right:0;'
+            'left:0;'
+            '}'
+            '</style>'), name='map_style')
+
+        super(LegacyMap, self).render(**kwargs)
+
+
+class GlobalSwitches(Element):
+    def __init__(self, prefer_canvas=False, no_touch=False, disable_3d=False):
+        super(GlobalSwitches, self).__init__()
+        self._name = 'GlobalSwitches'
+
+        self.prefer_canvas = prefer_canvas
+        self.no_touch = no_touch
+        self.disable_3d = disable_3d
+
+        self._template = Template(
+            '<script>'
+            'L_PREFER_CANVAS = {% if this.prefer_canvas %}true{% else %}false{% endif %}; '
+            'L_NO_TOUCH = {% if this.no_touch %}true{% else %}false{% endif %}; '
+            'L_DISABLE_3D = {% if this.disable_3d %}true{% else %}false{% endif %};'
+            '</script>'
+        )
 
 
 class Layer(MacroElement):
@@ -33,15 +369,102 @@ class Layer(MacroElement):
         Adds the layer as an optional overlay (True) or the base layer (False).
     control : bool, default True
         Whether the Layer will be included in LayerControls.
-    show: bool, default True
-        Whether the layer will be shown on opening (only for overlays).
     """
-    def __init__(self, name=None, overlay=False, control=True, show=True):
+    def __init__(self, name=None, overlay=False, control=True):
         super(Layer, self).__init__()
         self.layer_name = name if name is not None else self.get_name()
         self.overlay = overlay
         self.control = control
-        self.show = show
+
+
+class TileLayer(Layer):
+    """Create a tile layer to append on a Map.
+
+    Parameters
+    ----------
+    tiles: str, default 'OpenStreetMap'
+        Map tileset to use. Can choose from this list of built-in tiles:
+            - "OpenStreetMap"
+            - "Mapbox Bright" (Limited levels of zoom for free tiles)
+            - "Mapbox Control Room" (Limited levels of zoom for free tiles)
+            - "Stamen" (Terrain, Toner, and Watercolor)
+            - "Cloudmade" (Must pass API key)
+            - "Mapbox" (Must pass API key)
+            - "CartoDB" (positron and dark_matter)
+
+        You can pass a custom tileset to Folium by passing a Leaflet-style
+        URL to the tiles parameter: ``http://{s}.yourtiles.com/{z}/{x}/{y}.png``
+    min_zoom: int, default 1
+        Minimal zoom for which the layer will be displayed.
+    max_zoom: int, default 18
+        Maximal zoom for which the layer will be displayed.
+    attr: string, default None
+        Map tile attribution; only required if passing custom tile URL.
+    API_key: str, default None
+        API key for Cloudmade or Mapbox tiles.
+    detect_retina: bool, default False
+        If true and user is on a retina display, it will request four
+        tiles of half the specified size and a bigger zoom level in place
+        of one to utilize the high resolution.
+    name : string, default None
+        The name of the Layer, as it will appear in LayerControls
+    overlay : bool, default False
+        Adds the layer as an optional overlay (True) or the base layer (False).
+    control : bool, default True
+        Whether the Layer will be included in LayerControls.
+    subdomains: list of strings, default ['abc']
+        Subdomains of the tile service.
+    """
+    def __init__(self, tiles='OpenStreetMap', min_zoom=1, max_zoom=18,
+                 attr=None, API_key=None, detect_retina=False,
+                 name=None, overlay=False,
+                 control=True, no_wrap=False, subdomains='abc'):
+        self.tile_name = (name if name is not None else
+                          ''.join(tiles.lower().strip().split()))
+        super(TileLayer, self).__init__(name=self.tile_name, overlay=overlay,
+                                        control=control)
+        self._name = 'TileLayer'
+        self._env = ENV
+
+        options = {
+            'minZoom': min_zoom,
+            'maxZoom': max_zoom,
+            'noWrap': no_wrap,
+            'attribution': attr,
+            'subdomains': subdomains,
+            'detectRetina': detect_retina,
+        }
+        self.options = json.dumps(options, sort_keys=True, indent=2)
+
+        self.tiles = ''.join(tiles.lower().strip().split())
+        if self.tiles in ('cloudmade', 'mapbox') and not API_key:
+            raise ValueError('You must pass an API key if using Cloudmade'
+                             ' or non-default Mapbox tiles.')
+        templates = list(self._env.list_templates(
+            filter_func=lambda x: x.startswith('tiles/')))
+        tile_template = 'tiles/'+self.tiles+'/tiles.txt'
+        attr_template = 'tiles/'+self.tiles+'/attr.txt'
+
+        if tile_template in templates and attr_template in templates:
+            self.tiles = self._env.get_template(tile_template).render(API_key=API_key)  # noqa
+            self.attr = self._env.get_template(attr_template).render()
+        else:
+            self.tiles = tiles
+            if not attr:
+                raise ValueError('Custom tiles must'
+                                 ' also be passed an attribution.')
+            if isinstance(attr, binary_type):
+                attr = text_type(attr, 'utf8')
+            self.attr = attr
+
+        self._template = Template(u"""
+        {% macro script(this, kwargs) %}
+            var {{this.get_name()}} = L.tileLayer(
+                '{{this.tiles}}',
+                {{ this.options }}
+                ).addTo({{this._parent.get_name()}});
+        {% endmacro %}
+        """)  # noqa
 
 
 class FeatureGroup(Layer):
@@ -59,14 +482,9 @@ class FeatureGroup(Layer):
     overlay : bool, default True
         Whether your layer will be an overlay (ticked with a check box in
         LayerControls) or a base layer (ticked with a radio button).
-    control: bool, default True
-        Whether the layer will be included in LayerControls.
-    show: bool, default True
-        Whether the layer will be shown on opening (only for overlays).
     """
-    def __init__(self, name=None, overlay=True, control=True, show=True):
-        super(FeatureGroup, self).__init__(name=name, overlay=overlay,
-                                           control=control, show=show)
+    def __init__(self, name=None, overlay=True, control=True):
+        super(FeatureGroup, self).__init__(overlay=overlay, control=control, name=name)  # noqa
         self._name = 'FeatureGroup'
 
         self.tile_name = name if name is not None else self.get_name()
@@ -106,7 +524,6 @@ class LayerControl(MacroElement):
         self.autoZIndex = str(autoZIndex).lower()
         self.base_layers = OrderedDict()
         self.overlays = OrderedDict()
-        self.layers_untoggle = []
 
         self._template = Template("""
         {% macro script(this,kwargs) %}
@@ -121,27 +538,23 @@ class LayerControl(MacroElement):
                  collapsed: {{this.collapsed}},
                  autoZIndex: {{this.autoZIndex}}
                 }).addTo({{this._parent.get_name()}});
-            {% for val in this.layers_untoggle %}
-                {{ val }}.remove();{% endfor %}
         {% endmacro %}
         """)  # noqa
 
     def render(self, **kwargs):
         """Renders the HTML representation of the element."""
+        # We select all Layers for which (control and not overlay).
         self.base_layers = OrderedDict(
             [(val.layer_name, val.get_name()) for key, val in
-             self._parent._children.items() if isinstance(val, Layer)
-             and not val.overlay and val.control])
+             self._parent._children.items() if isinstance(val, Layer) and
+             (not hasattr(val, 'overlay') or not val.overlay) and
+             (not hasattr(val, 'control') or val.control)])
+        # We select all Layers for which (control and overlay).
         self.overlays = OrderedDict(
             [(val.layer_name, val.get_name()) for key, val in
-             self._parent._children.items() if isinstance(val, Layer)
-             and val.overlay and val.control])
-        self.layers_untoggle = [
-            val.get_name() for val in
-            self._parent._children.values() if isinstance(val, Layer)
-            and val.overlay and val.control and not val.show]
-        for additional_base_layer in list(self.base_layers.values())[1:]:
-            self.layers_untoggle.append(additional_base_layer)
+             self._parent._children.items() if isinstance(val, Layer) and
+             (hasattr(val, 'overlay') and val.overlay) and
+             (not hasattr(val, 'control') or val.control)])
         super(LayerControl, self).render()
 
 
@@ -174,9 +587,8 @@ class Icon(MacroElement):
         The prefix states the source of the icon. 'fa' for font-awesome or
         'glyphicon' for bootstrap 3.
 
-
+    For more details see:
     https://github.com/lvoogdt/Leaflet.awesome-markers
-
     """
     def __init__(self, color='blue', icon_color='white', icon='info-sign',
                  angle=0, prefix='glyphicon'):
@@ -213,8 +625,7 @@ class Marker(MacroElement):
     location: tuple or list, default None
         Latitude and Longitude of Marker (Northing, Easting)
     popup: string or folium.Popup, default None
-        Label for the Marker; either an escaped HTML string to initialize
-        folium.Popup or a folium.Popup instance.
+        Input text or visualization for object.
     icon: Icon plugin
         the Icon plugin to use to render the marker.
 
@@ -226,14 +637,13 @@ class Marker(MacroElement):
     --------
     >>> Marker(location=[45.5, -122.3], popup='Portland, OR')
     >>> Marker(location=[45.5, -122.3], popup=folium.Popup('Portland, OR'))
-    # If the popup label has characters that need to be escaped in HTML
-    >>> Marker(location=[45.5, -122.3],
-               popoup=folium.Popup('Mom & Pop Arrow Shop >>', parse_html=True))
+
     """
-    def __init__(self, location, popup=None, tooltip=None, icon=None):
+    def __init__(self, location, popup=None, icon=None):
         super(Marker, self).__init__()
         self._name = 'Marker'
-        self.tooltip = tooltip
+        # Must be _validate_coordinates b/c some markers are defined with
+        # multiple coordinates values, like Polygons.
         self.location = _validate_coordinates(location)
         if icon is not None:
             self.add_child(icon)
@@ -246,23 +656,21 @@ class Marker(MacroElement):
             {% macro script(this, kwargs) %}
 
             var {{this.get_name()}} = L.marker(
-                [{{this.location[0]}}, {{this.location[1]}}],
+                [{{this.location[0]}},{{this.location[1]}}],
                 {
                     icon: new L.Icon.Default()
                     }
                 )
-                {% if this.tooltip %}.bindTooltip("{{this.tooltip.__str__()}}"){% endif %}
                 .addTo({{this._parent.get_name()}});
             {% endmacro %}
             """)
 
     def _get_self_bounds(self):
+        """Computes the bounds of the object itself (not including it's children)
+        in the form [[lat_min, lon_min], [lat_max, lon_max]]
         """
-        Computes the bounds of the object itself (not including it's children)
-        in the form [[lat_min, lon_min], [lat_max, lon_max]].
-
-        """
-        return get_bounds(self.location)
+        return [[self.location[0], self.location[1]],
+                [self.location[0], self.location[1]]]
 
 
 class Popup(Element):
