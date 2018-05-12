@@ -86,7 +86,7 @@ class Draw(MacroElement):
         figure.header.add_child(
             JavascriptLink('https://cdn.rawgit.com/Leaflet/Leaflet.draw/v1.0.2/dist/leaflet.draw.js'))
         figure.header.add_child(
-            CssLink('https://cdn.rawgit.com/Leaflet/Leaflet.draw/v1.0.2/dist/leaflet.draw.css'))
+            CssLink('https://raw.githubusercontent.com/Leaflet/Leaflet.draw/v1.0.2/src/leaflet.draw.css'))
 
         export_style = """<style>
         #export {
